@@ -1,7 +1,6 @@
 const express = require("express");
 const WebSocket = require("ws");
 const { getAllCharacters, getCharactersByUser } = require("./server/characterService");
-const { handleCharacterSelection, unlockCharactersOnDisconnect } = require("./server/cardSelector");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -18,6 +17,10 @@ const wss = new WebSocket.Server({ server });
 
 let rooms = {};
 let charactersCache = [];
+
+// 🔹 Map de personajes bloqueados por sala
+// roomsLocked[roomCode] = { characterId: playerId }
+let roomsLocked = {};
 
 // Cargar personajes al iniciar
 (async () => {
@@ -41,11 +44,12 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check para Railway
+// Health check
 app.get('/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
+// Función para obtener personajes de un jugador
 async function handlePlayerJoin(userId) {
   try {
     const userCharacters = await getCharactersByUser(userId);
@@ -57,32 +61,70 @@ async function handlePlayerJoin(userId) {
   }
 }
 
+// Broadcast a todos en la sala
 function broadcastToRoom(roomCode, msg) {
-  if (!rooms[roomCode]) {
-    console.log(`❌ Sala ${roomCode} no existe para broadcast`);
-    return;
-  }
-
-  console.log(`📢 Enviando a sala ${roomCode}:`, msg.type);
-
-  rooms[roomCode].players.forEach((player) => {
+  if (!rooms[roomCode]) return;
+  rooms[roomCode].players.forEach(player => {
     if (player.ws.readyState === WebSocket.OPEN) {
-      try {
-        player.ws.send(JSON.stringify(msg));
-      } catch (error) {
-        console.error("❌ Error enviando mensaje:", error);
-      }
+      try { player.ws.send(JSON.stringify(msg)); } 
+      catch (error) { console.error("❌ Error enviando mensaje:", error); }
     }
   });
 }
 
-// WebSocket connection handling
-wss.on("connection", (ws, req) => {
-  console.log("🔗 Nueva conexión de cliente");
+// 🔹 Lógica de selección de personaje (antes cardSelector.js)
+function handleCharacterSelection(ws, rooms, data) {
+  const { room_code, player_id, character_id, cp_image } = data;
 
-  // Información del cliente (útil para debugging)
-  const clientIP = req.socket.remoteAddress;
-  console.log(`📍 Cliente conectado desde: ${clientIP}`);
+  if (!rooms[room_code]) {
+    ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
+    return;
+  }
+
+  if (!roomsLocked[room_code]) roomsLocked[room_code] = {};
+
+  // Verifica si el personaje ya está bloqueado
+  if (roomsLocked[room_code][character_id]) {
+    ws.send(JSON.stringify({ 
+      type: "character_locked",
+      character_id: character_id,
+      locked_by: roomsLocked[room_code][character_id]
+    }));
+    return;
+  }
+
+  // Bloquea el personaje
+  roomsLocked[room_code][character_id] = player_id;
+
+  // Envía actualización a todos los jugadores
+  rooms[room_code].players.forEach(player => {
+    if (player.ws.readyState === WebSocket.OPEN) {
+      player.ws.send(JSON.stringify({
+        type: player.id === player_id ? "character_selected" : "character_locked",
+        character_id: parseInt(character_id),
+        player_id: player_id,
+        cp_image: cp_image
+      }));
+    }
+  });
+
+  console.log(`🎯 Player ${player_id} seleccionó el personaje ${character_id} en sala ${room_code}`);
+}
+
+// Desbloquear personajes si un jugador se desconecta
+function unlockCharactersOnDisconnect(room_code, player_id) {
+  if (!roomsLocked[room_code]) return;
+  for (const charId in roomsLocked[room_code]) {
+    if (roomsLocked[room_code][charId] === player_id) {
+      delete roomsLocked[room_code][charId];
+      console.log(`🔓 Personaje ${charId} desbloqueado en sala ${room_code} por desconexión de ${player_id}`);
+    }
+  }
+}
+
+// WebSocket connection
+wss.on("connection", (ws, req) => {
+  console.log("🔗 Nueva conexión de cliente:", req.socket.remoteAddress);
 
   ws.on("close", (code, reason) => {
     console.log(`🔗 Cliente desconectado. Código: ${code}, Razón: ${reason}`);
@@ -90,28 +132,21 @@ wss.on("connection", (ws, req) => {
     for (const roomCode in rooms) {
       const room = rooms[roomCode];
       const playerIndex = room.players.findIndex(p => p.ws === ws);
-
       if (playerIndex === -1) continue;
 
       const player = room.players[playerIndex];
 
       if (player.id === room.hostId) {
         console.log(`🛑 Host ${player.username} desconectó, cerrando sala ${roomCode}`);
-
-        // Notificar a otros jugadores
         room.players.forEach(p => {
-          if (p.ws !== ws && p.ws.readyState === WebSocket.OPEN) {
+          if (p.ws !== ws && p.ws.readyState === WebSocket.OPEN)
             p.ws.send(JSON.stringify({ type: "host_disconnected" }));
-          }
         });
-
         delete rooms[roomCode];
 
       } else {
         console.log(`🛑 Jugador ${player.username} eliminado de la sala ${roomCode}`);
         room.players.splice(playerIndex, 1);
-
-        // Notificar actualización de sala
         broadcastToRoom(roomCode, {
           type: "player_left",
           playerId: player.id,
@@ -124,138 +159,107 @@ wss.on("connection", (ws, req) => {
           }))
         });
       }
+
+      unlockCharactersOnDisconnect(roomCode, player.id);
       break;
     }
   });
 
-  ws.on("error", (error) => {
-    console.error("❌ Error en WebSocket:", error);
-  });
+  ws.on("error", error => console.error("❌ Error en WebSocket:", error));
 
   ws.on("message", async (message) => {
-    try {
-      console.log("📩 Mensaje recibido:", message.toString());
+    let data;
+    try { data = JSON.parse(message); } 
+    catch (e) { 
+      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" })); 
+      return; 
+    }
 
-      let data;
-      try {
-        data = JSON.parse(message);
-      } catch (e) {
-        console.log("⚠️ Mensaje inválido, no es JSON");
-        ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-        return;
-      }
+    switch (data.type) {
+      case "create_room":
+        const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+        rooms[roomCode] = { players: [], hostId: data.hostId, createdAt: new Date().toISOString() };
 
-      switch (data.type) {
-        case "create_room":
-          const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-          rooms[roomCode] = {
-            players: [],
-            hostId: data.hostId,
-            createdAt: new Date().toISOString()
-          };
+        const newPlayer = {
+          id: data.hostId,
+          username: data.username,
+          ws: ws,
+          character_texture: data.character_texture || "res://Assets/UI-Items/Room/default_character.png",
+          profile_texture: data.profile_texture || "res://Assets/UI-Items/Room/default_profile.png",
+          status_texture: data.status_texture || "res://Assets/UI-Items/Room/notReady.png"
+        };
+        rooms[roomCode].players.push(newPlayer);
 
-          const newPlayer = {
-            id: data.hostId,
-            username: data.username,
-            ws: ws,
-            character_texture: data.character_texture || "res://Assets/UI-Items/Room/default_character.png",
-            profile_texture: data.profile_texture || "res://Assets/UI-Items/Room/default_profile.png",
-            status_texture: data.status_texture || "res://Assets/UI-Items/Room/notReady.png"
-          };
+        ws.send(JSON.stringify({ type: "room_created", room_code: roomCode, host_id: data.hostId }));
+        console.log(`🎉 Sala creada: ${roomCode} por ${data.username}`);
+        break;
 
-          rooms[roomCode].players.push(newPlayer);
+      case "join_room":
+        if (!rooms[data.room_code]) {
+          ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
+          return;
+        }
 
-          ws.send(JSON.stringify({
-            type: "room_created",
-            room_code: roomCode,
-            host_id: data.hostId
-          }));
+        if (rooms[data.room_code].players.length >= 4) {
+          ws.send(JSON.stringify({ type: "error", message: "Room is full" }));
+          return;
+        }
 
-          console.log(`🎉 Sala creada: ${roomCode} por ${data.username}`);
-          break;
+        const joiningPlayer = {
+          id: data.playerId || data.hostId,
+          username: data.username,
+          ws: ws,
+          character_texture: data.character_texture || "res://Assets/UI-Items/Room/default_character.png",
+          profile_texture: data.profile_texture || "res://Assets/UI-Items/Room/default_profile.png",
+          status_texture: data.status_texture || "res://Assets/UI-Items/Room/notReady.png"
+        };
 
-        case "join_room":
-          if (!rooms[data.room_code]) {
-            console.log(`❌ Sala ${data.room_code} no existe`);
-            ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
-            return;
-          }
+        rooms[data.room_code].players.push(joiningPlayer);
 
-          if (rooms[data.room_code].players.length >= 4) { // Límite de jugadores
-            ws.send(JSON.stringify({ type: "error", message: "Room is full" }));
-            return;
-          }
+        ws.send(JSON.stringify({
+          type: "room_joined",
+          room_code: data.room_code,
+          players: rooms[data.room_code].players.map(p => ({
+            id: p.id,
+            username: p.username,
+            character_texture: p.character_texture,
+            profile_texture: p.profile_texture,
+            status_texture: p.status_texture
+          }))
+        }));
 
-          const joiningPlayer = {
-            id: data.playerId || data.hostId, // Cambiado para consistencia
-            username: data.username,
-            ws: ws,
-            character_texture: data.character_texture || "res://Assets/UI-Items/Room/default_character.png",
-            profile_texture: data.profile_texture || "res://Assets/UI-Items/Room/default_profile.png",
-            status_texture: data.status_texture || "res://Assets/UI-Items/Room/notReady.png"
-          };
+        broadcastToRoom(data.room_code, {
+          type: "room_update",
+          players: rooms[data.room_code].players.map(p => ({
+            id: p.id,
+            username: p.username,
+            character_texture: p.character_texture,
+            profile_texture: p.profile_texture,
+            status_texture: p.status_texture
+          }))
+        });
+        break;
 
-          rooms[data.room_code].players.push(joiningPlayer);
+      case "ping":
+        ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+        break;
 
-          console.log(`👤 ${data.username} se unió a la sala [${data.room_code}]`);
+      case "select_character":
+        handleCharacterSelection(ws, rooms, data);
+        break;
 
-          // Confirmar al jugador que se unió
-          ws.send(JSON.stringify({
-            type: "room_joined",
-            room_code: data.room_code,
-            players: rooms[data.room_code].players.map(p => ({
-              id: p.id,
-              username: p.username,
-              character_texture: p.character_texture,
-              profile_texture: p.profile_texture,
-              status_texture: p.status_texture
-            }))
-          }));
-
-          // Notificar a todos en la sala
-          broadcastToRoom(data.room_code, {
-            type: "room_update",
-            players: rooms[data.room_code].players.map(p => ({
-              id: p.id,
-              username: p.username,
-              character_texture: p.character_texture,
-              profile_texture: p.profile_texture,
-              status_texture: p.status_texture
-            }))
-          });
-          break;
-
-        case "ping":
-          ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
-          break;
-
-        case "select_character":
-          handleCharacterSelection(ws, rooms, data);
-          break;
-
-        default:
-          console.log(`⚠️ Tipo de mensaje desconocido: ${data.type}`);
-          ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
-      }
-    } catch (error) {
-      console.error("❌ Error procesando mensaje:", error);
-      ws.send(JSON.stringify({ type: "error", message: "Internal server error" }));
+      default:
+        ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
     }
   });
 
-  // Enviar mensaje de bienvenida
-  ws.send(JSON.stringify({
-    type: "connected",
-    message: "Connected to Cursed Fate server",
-    timestamp: Date.now()
-  }));
+  ws.send(JSON.stringify({ type: "connected", message: "Connected to Cursed Fate server", timestamp: Date.now() }));
 });
 
-// Manejar cierre graceful
+// Graceful shutdown
 process.on('SIGINT', () => {
   console.log('🛑 Cerrando servidor...');
   wss.close(() => {
-    unlockCharactersOnDisconnect(roomCode, player.id);
     console.log('✅ WebSocket server closed');
     process.exit(0);
   });
