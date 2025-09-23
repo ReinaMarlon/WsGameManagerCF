@@ -1,13 +1,18 @@
-// server.js
-const express = require('express');
+const express = require("express");
 const WebSocket = require("ws");
-const http = require('http'); // Cambiado a http, no https
 const { getAllCharacters, getCharactersByUser } = require("./server/characterService");
 
 const app = express();
-const server = http.createServer(app); // Railway maneja HTTPS automáticamente
 const PORT = process.env.PORT || 8080;
 
+// 🔹 Usa el mismo server que Express
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  console.log(`🌐 HTTP disponible en https://cursedfateserver.up.railway.app`);
+  console.log(`📡 WS disponible en wss://cursedfateserver.up.railway.app`);
+});
+
+// 🔹 Atacha WebSocket al mismo server
 const wss = new WebSocket.Server({ server });
 
 let rooms = {};
@@ -23,14 +28,14 @@ let charactersCache = [];
   }
 })();
 
-// Configurar Express para servir archivos estáticos
-app.use(express.static('public'));
+// Middleware para archivos estáticos
+app.use(express.static("public"));
 
 // Ruta de prueba
 app.get('/', (req, res) => {
   res.json({ 
     status: 'Server running', 
-    websocket: `ws://${req.hostname}`,
+    websocket: `wss://wsgamemanagercf.railway.app`,
     rooms: Object.keys(rooms).length 
   });
 });
@@ -239,13 +244,6 @@ wss.on("connection", (ws, req) => {
     message: "Connected to Cursed Fate server",
     timestamp: Date.now()
   }));
-});
-
-// Iniciar servidor
-server.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📡 WebSocket disponible en ws://localhost:${PORT}`);
-  console.log(`🌐 HTTP disponible en http://localhost:${PORT}`);
 });
 
 // Manejar cierre graceful
