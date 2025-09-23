@@ -13,6 +13,7 @@ let roomsLocked = {};
  */
 function handleCharacterSelection(ws, rooms, data) {
   const { room_code, player_id, character_id, cp_image } = data;
+  console.log("🔹 select_character recibido:", data);
 
   if (!rooms[room_code]) {
     ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
@@ -39,15 +40,19 @@ function handleCharacterSelection(ws, rooms, data) {
 
   // Enviar actualización a todos los jugadores de la sala
   rooms[room_code].players.forEach(player => {
-    if (player.ws.readyState === WebSocket.OPEN) {
-      player.ws.send(JSON.stringify({
+    const msg = {
         type: player.id === player_id ? "character_selected" : "character_locked",
         character_id: parseInt(character_id),
         player_id: player_id,
         cp_image: cp_image
-      }));
+    };
+    console.log("📤 Enviando a", player.username, msg);
+    try {
+        player.ws.send(JSON.stringify(msg));
+    } catch (err) {
+        console.error("❌ Error enviando select_character:", err);
     }
-  });
+});
 
   console.log(`🎯 Player ${player_id} seleccionó el personaje ${character_id} en sala ${room_code}`);
 }

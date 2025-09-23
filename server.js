@@ -2,6 +2,7 @@ const express = require("express");
 const WebSocket = require("ws");
 const { getAllCharacters, getCharactersByUser } = require("./server/characterService");
 
+
 const app = express();
 const PORT = process.env.PORT || 8080;
 
@@ -66,7 +67,7 @@ function broadcastToRoom(roomCode, msg) {
   if (!rooms[roomCode]) return;
   rooms[roomCode].players.forEach(player => {
     if (player.ws.readyState === WebSocket.OPEN) {
-      try { player.ws.send(JSON.stringify(msg)); } 
+      try { player.ws.send(JSON.stringify(msg)); }
       catch (error) { console.error("❌ Error enviando mensaje:", error); }
     }
   });
@@ -85,7 +86,7 @@ function handleCharacterSelection(ws, rooms, data) {
 
   // Verifica si el personaje ya está bloqueado
   if (roomsLocked[room_code][character_id]) {
-    ws.send(JSON.stringify({ 
+    ws.send(JSON.stringify({
       type: "character_locked",
       character_id: character_id,
       locked_by: roomsLocked[room_code][character_id]
@@ -114,11 +115,24 @@ function handleCharacterSelection(ws, rooms, data) {
 // Desbloquear personajes si un jugador se desconecta
 function unlockCharactersOnDisconnect(room_code, player_id) {
   if (!roomsLocked[room_code]) return;
+
+  const unlockedCharacters = [];
+
   for (const charId in roomsLocked[room_code]) {
     if (roomsLocked[room_code][charId] === player_id) {
       delete roomsLocked[room_code][charId];
+      unlockedCharacters.push(charId);
       console.log(`🔓 Personaje ${charId} desbloqueado en sala ${room_code} por desconexión de ${player_id}`);
     }
+  }
+  
+  // Notificar a todos los jugadores sobre los personajes desbloqueados
+  if (unlockedCharacters.length > 0) {
+    broadcastToRoom(room_code, {
+      type: "characters_unlocked",
+      character_ids: unlockedCharacters,
+      player_id: player_id
+    });
   }
 }
 
@@ -142,11 +156,15 @@ wss.on("connection", (ws, req) => {
           if (p.ws !== ws && p.ws.readyState === WebSocket.OPEN)
             p.ws.send(JSON.stringify({ type: "host_disconnected" }));
         });
+        // Desbloquear personajes antes de borrar la sala
+        unlockCharactersOnDisconnect(roomCode, player.id);
         delete rooms[roomCode];
 
       } else {
         console.log(`🛑 Jugador ${player.username} eliminado de la sala ${roomCode}`);
         room.players.splice(playerIndex, 1);
+        unlockCharactersOnDisconnect(roomCode, player.id);
+
         broadcastToRoom(roomCode, {
           type: "player_left",
           playerId: player.id,
@@ -159,20 +177,18 @@ wss.on("connection", (ws, req) => {
           }))
         });
       }
-
-      unlockCharactersOnDisconnect(roomCode, player.id);
-      break;
     }
   });
+
 
   ws.on("error", error => console.error("❌ Error en WebSocket:", error));
 
   ws.on("message", async (message) => {
     let data;
-    try { data = JSON.parse(message); } 
-    catch (e) { 
-      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" })); 
-      return; 
+    try { data = JSON.parse(message); }
+    catch (e) {
+      ws.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+      return;
     }
 
     switch (data.type) {
