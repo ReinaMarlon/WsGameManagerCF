@@ -125,7 +125,7 @@ function unlockCharactersOnDisconnect(room_code, player_id) {
       console.log(`🔓 Personaje ${charId} desbloqueado en sala ${room_code} por desconexión de ${player_id}`);
     }
   }
-  
+
   // Notificar a todos los jugadores sobre los personajes desbloqueados
   if (unlockedCharacters.length > 0) {
     broadcastToRoom(room_code, {
@@ -254,6 +254,53 @@ wss.on("connection", (ws, req) => {
             status_texture: p.status_texture
           }))
         });
+        break;
+      case "player_ready":
+        if (!rooms[data.room_code]) {
+          ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
+          return;
+        }
+
+        // Actualizar estado del jugador
+        const player = rooms[data.room_code].players.find(p => p.id === data.player_id);
+        if (player) {
+          player.ready = data.ready;
+        }
+
+        // Broadcast a todos
+        broadcastToRoom(data.room_code, {
+          type: "player_ready",
+          player_id: data.player_id,
+          ready: data.ready
+        });
+        break;
+
+      case "start_game":
+        const room = rooms[data.room_code];
+        if (!room || room.hostId !== data.host_id) {
+          ws.send(JSON.stringify({ type: "error", message: "Not authorized" }));
+          return;
+        }
+
+        // Verificar que todos tengan personajes y estén listos
+        const gameData = {
+          room_code: data.room_code,
+          players: room.players.map(p => ({
+            id: p.id,
+            username: p.username,
+            character_id: p.selected_character || null,
+            ready: p.ready || false
+          }))
+        };
+
+        // Enviar a todos los jugadores
+        broadcastToRoom(data.room_code, {
+          type: "game_starting",
+          game_data: gameData
+        });
+
+        // Limpiar la sala después de iniciar
+        delete rooms[data.room_code];
         break;
 
       case "ping":
