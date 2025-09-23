@@ -1,6 +1,7 @@
 const express = require("express");
 const WebSocket = require("ws");
 const { getAllCharacters, getCharactersByUser } = require("./server/characterService");
+const { handleCharacterSelection, unlockCharactersOnDisconnect } = require("./server/cardSelector");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -33,10 +34,10 @@ app.use(express.static("public"));
 
 // Ruta de prueba
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'Server running', 
-    websocket: `wss://wsgamemanagercf.railway.app`,
-    rooms: Object.keys(rooms).length 
+  res.json({
+    status: 'Server running',
+    websocket: `wss://wsgamemanagercf.up.railway.app`,
+    rooms: Object.keys(rooms).length
   });
 });
 
@@ -61,9 +62,9 @@ function broadcastToRoom(roomCode, msg) {
     console.log(`❌ Sala ${roomCode} no existe para broadcast`);
     return;
   }
-  
+
   console.log(`📢 Enviando a sala ${roomCode}:`, msg.type);
-  
+
   rooms[roomCode].players.forEach((player) => {
     if (player.ws.readyState === WebSocket.OPEN) {
       try {
@@ -78,7 +79,7 @@ function broadcastToRoom(roomCode, msg) {
 // WebSocket connection handling
 wss.on("connection", (ws, req) => {
   console.log("🔗 Nueva conexión de cliente");
-  
+
   // Información del cliente (útil para debugging)
   const clientIP = req.socket.remoteAddress;
   console.log(`📍 Cliente conectado desde: ${clientIP}`);
@@ -147,8 +148,8 @@ wss.on("connection", (ws, req) => {
       switch (data.type) {
         case "create_room":
           const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-          rooms[roomCode] = { 
-            players: [], 
+          rooms[roomCode] = {
+            players: [],
             hostId: data.hostId,
             createdAt: new Date().toISOString()
           };
@@ -164,12 +165,12 @@ wss.on("connection", (ws, req) => {
 
           rooms[roomCode].players.push(newPlayer);
 
-          ws.send(JSON.stringify({ 
-            type: "room_created", 
-            room_code: roomCode, 
-            host_id: data.hostId 
+          ws.send(JSON.stringify({
+            type: "room_created",
+            room_code: roomCode,
+            host_id: data.hostId
           }));
-          
+
           console.log(`🎉 Sala creada: ${roomCode} por ${data.username}`);
           break;
 
@@ -228,6 +229,10 @@ wss.on("connection", (ws, req) => {
           ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
           break;
 
+        case "select_character":
+          handleCharacterSelection(ws, rooms, data);
+          break;
+
         default:
           console.log(`⚠️ Tipo de mensaje desconocido: ${data.type}`);
           ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
@@ -239,8 +244,8 @@ wss.on("connection", (ws, req) => {
   });
 
   // Enviar mensaje de bienvenida
-  ws.send(JSON.stringify({ 
-    type: "connected", 
+  ws.send(JSON.stringify({
+    type: "connected",
     message: "Connected to Cursed Fate server",
     timestamp: Date.now()
   }));
