@@ -255,6 +255,7 @@ wss.on("connection", (ws, req) => {
 process.on('SIGINT', () => {
   console.log('🛑 Cerrando servidor...');
   wss.close(() => {
+    unlockCharactersOnDisconnect(roomCode, player.id);
     console.log('✅ WebSocket server closed');
     process.exit(0);
   });

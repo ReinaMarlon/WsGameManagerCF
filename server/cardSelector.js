@@ -12,7 +12,7 @@ let roomsLocked = {};
  * @param {Object} data Payload del cliente { room_code, player_id, character_id }
  */
 function handleCharacterSelection(ws, rooms, data) {
-  const { room_code, player_id, character_id } = data;
+  const { room_code, player_id, character_id, cp_image } = data;
 
   if (!rooms[room_code]) {
     ws.send(JSON.stringify({ type: "error", message: "Room not found" }));
@@ -42,8 +42,9 @@ function handleCharacterSelection(ws, rooms, data) {
     if (player.ws.readyState === WebSocket.OPEN) {
       player.ws.send(JSON.stringify({
         type: player.id === player_id ? "character_selected" : "character_locked",
-        character_id: character_id,
-        player_id: player_id
+        character_id: parseInt(character_id),
+        player_id: player_id,
+        cp_image: cp_image
       }));
     }
   });
