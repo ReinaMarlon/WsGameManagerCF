@@ -235,6 +235,7 @@ wss.on("connection", (ws, req) => {
         ws.send(JSON.stringify({
           type: "room_joined",
           room_code: data.room_code,
+          host_id: rooms[data.room_code].hostId,
           players: rooms[data.room_code].players.map(p => ({
             id: p.id,
             username: p.username,
