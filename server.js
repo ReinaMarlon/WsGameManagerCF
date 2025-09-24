@@ -250,10 +250,10 @@ wss.on("connection", (ws, req) => {
         if (roomsLocked[data.room_code]) {
           for (const charId in roomsLocked[data.room_code]) {
             const lockedBy = roomsLocked[data.room_code][charId];
-            
+
             const lockingPlayer = rooms[data.room_code].players.find(p => p.id === lockedBy);
             const characterImage = lockingPlayer?.selected_character_image || null;
-            
+
             ws.send(JSON.stringify({
               type: "character_locked",
               character_id: parseInt(charId),
@@ -323,12 +323,13 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "player_left":
-        // Salida voluntaria de jugador
         for (const roomCode in rooms) {
           const room = rooms[roomCode];
           const playerIndex = room.players.findIndex(p => p.id === data.playerId);
           if (playerIndex !== -1) {
             const player = room.players[playerIndex];
+            console.log(`🛑 Jugador ${player.username} salió voluntariamente de ${roomCode}`);
+
             room.players.splice(playerIndex, 1);
             unlockCharactersOnDisconnect(roomCode, player.id);
 
@@ -349,9 +350,10 @@ wss.on("connection", (ws, req) => {
         break;
 
       case "host_disconnected":
-        // Cierre intencional de sala por host
         const roomToClose = rooms[data.room_code];
         if (roomToClose && roomToClose.hostId === data.host_id) {
+          console.log(`🛑 Host cerró la sala ${data.room_code}`);
+
           roomToClose.players.forEach(p => {
             if (p.ws !== ws && p.ws.readyState === WebSocket.OPEN)
               p.ws.send(JSON.stringify({ type: "host_disconnected" }));
@@ -359,7 +361,9 @@ wss.on("connection", (ws, req) => {
 
           unlockCharactersOnDisconnect(data.room_code, data.host_id);
           delete rooms[data.room_code];
-          delete roomsLocked[data.room_code];
+          if (roomsLocked[data.room_code]) {
+            delete roomsLocked[data.room_code];
+          }
         }
         break;
 
@@ -367,18 +371,18 @@ wss.on("connection", (ws, req) => {
         ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         break;
 
-        case "select_character":
-          handleCharacterSelection(ws, rooms, data);
-          
-          const selectRoom = rooms[data.room_code];
-          if (selectRoom) {
-            const player = selectRoom.players.find(p => p.id === data.player_id);
-            if (player) {
-              player.selected_character = data.character_id;
-              player.selected_character_image = data.cp_image;
-            }
+      case "select_character":
+        handleCharacterSelection(ws, rooms, data);
+
+        const selectRoom = rooms[data.room_code];
+        if (selectRoom) {
+          const player = selectRoom.players.find(p => p.id === data.player_id);
+          if (player) {
+            player.selected_character = data.character_id;
+            player.selected_character_image = data.cp_image;
           }
-          break;
+        }
+        break;
 
       default:
         ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
