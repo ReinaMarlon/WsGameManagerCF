@@ -241,9 +241,27 @@ wss.on("connection", (ws, req) => {
             username: p.username,
             character_texture: p.character_texture,
             profile_texture: p.profile_texture,
-            status_texture: p.status_texture
+            status_texture: p.status_texture,
+            ready: p.ready || false,
+            selected_character: p.selected_character || null
           }))
         }));
+
+        if (roomsLocked[data.room_code]) {
+          for (const charId in roomsLocked[data.room_code]) {
+            const lockedBy = roomsLocked[data.room_code][charId];
+            
+            const lockingPlayer = rooms[data.room_code].players.find(p => p.id === lockedBy);
+            const characterImage = lockingPlayer?.selected_character_image || null;
+            
+            ws.send(JSON.stringify({
+              type: "character_locked",
+              character_id: parseInt(charId),
+              player_id: lockedBy,
+              cp_image: characterImage
+            }));
+          }
+        }
 
         broadcastToRoom(data.room_code, {
           type: "room_update",
@@ -349,9 +367,18 @@ wss.on("connection", (ws, req) => {
         ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         break;
 
-      case "select_character":
-        handleCharacterSelection(ws, rooms, data);
-        break;
+        case "select_character":
+          handleCharacterSelection(ws, rooms, data);
+          
+          const selectRoom = rooms[data.room_code];
+          if (selectRoom) {
+            const player = selectRoom.players.find(p => p.id === data.player_id);
+            if (player) {
+              player.selected_character = data.character_id;
+              player.selected_character_image = data.cp_image;
+            }
+          }
+          break;
 
       default:
         ws.send(JSON.stringify({ type: "error", message: "Unknown message type" }));
