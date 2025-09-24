@@ -304,6 +304,47 @@ wss.on("connection", (ws, req) => {
         delete rooms[data.room_code];
         break;
 
+      case "player_left":
+        // Salida voluntaria de jugador
+        for (const roomCode in rooms) {
+          const room = rooms[roomCode];
+          const playerIndex = room.players.findIndex(p => p.id === data.playerId);
+          if (playerIndex !== -1) {
+            const player = room.players[playerIndex];
+            room.players.splice(playerIndex, 1);
+            unlockCharactersOnDisconnect(roomCode, player.id);
+
+            broadcastToRoom(roomCode, {
+              type: "player_left",
+              playerId: player.id,
+              players: room.players.map(p => ({
+                id: p.id,
+                username: p.username,
+                character_texture: p.character_texture,
+                profile_texture: p.profile_texture,
+                status_texture: p.status_texture
+              }))
+            });
+            break;
+          }
+        }
+        break;
+
+      case "host_disconnected":
+        // Cierre intencional de sala por host
+        const roomToClose = rooms[data.room_code];
+        if (roomToClose && roomToClose.hostId === data.host_id) {
+          roomToClose.players.forEach(p => {
+            if (p.ws !== ws && p.ws.readyState === WebSocket.OPEN)
+              p.ws.send(JSON.stringify({ type: "host_disconnected" }));
+          });
+
+          unlockCharactersOnDisconnect(data.room_code, data.host_id);
+          delete rooms[data.room_code];
+          delete roomsLocked[data.room_code];
+        }
+        break;
+
       case "ping":
         ws.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         break;
